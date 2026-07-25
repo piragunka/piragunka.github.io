@@ -1,29 +1,59 @@
 <!doctype html>
 <script>
 (() => {
-    const CHANNEL_URL =
-        "https://max.ru/join/ObH6FMhjvGkMBbVgfdD9CZPEBdUB0KR78kR2RqtgcdE";
+    "use strict";
 
-    const query =
-        new URLSearchParams(location.search);
-
-    const fragment =
+    const hashParams =
         new URLSearchParams(location.hash.slice(1));
 
     const initData =
-        fragment.get("WebAppData") || "";
+        hashParams.get("WebAppData") || "";
 
-    const campaign =
-        query.get("WebAppStartParam") || "";
+    const initParams =
+        new URLSearchParams(initData);
 
-    const body =
-        new URLSearchParams({
-            init_data: initData,
-            campaign: campaign
-        });
+    let user = {};
 
-    navigator.sendBeacon("/track", body);
+    try {
+        user = JSON.parse(
+            initParams.get("user") || "{}"
+        );
+    } catch {
+        user = {};
+    }
 
-    location.replace(CHANNEL_URL);
+    const queryParams =
+        new URLSearchParams(location.search);
+
+    const stats = {
+        user_id: user.id || "",
+        first_name: user.first_name || "",
+        last_name: user.last_name || "",
+        username: user.username || "",
+
+        campaign:
+            initParams.get("start_param") ||
+            queryParams.get("WebAppStartParam") ||
+            "",
+
+        query_id:
+            initParams.get("query_id") || "",
+
+        auth_date:
+            initParams.get("auth_date") || "",
+
+        platform:
+            hashParams.get("WebAppPlatform") || "",
+
+        version:
+            hashParams.get("WebAppVersion") || "",
+
+        init_data: initData
+    };
+
+    location.replace(
+        "https://max.ru/join/ObH6FMhjvGkMBbVgfdD9CZPEBdUB0KR78kR2RqtgcdE"
+    );
 })();
 </script>
+Залупа1
