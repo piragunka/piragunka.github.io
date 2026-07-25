@@ -17,91 +17,22 @@
         /*
          * ВСТАВЬТЕ СЮДА ТОЧНУЮ ССЫЛКУ НА КАНАЛ MAX.
          */
-        const CHANNEL_URL =
-            "https://max.ru/join/JdMSujHwZy1VyI52riP8lDjbA4lqzHN8rbbH9LCxvdo";
-
-        /*
-         * Пауза перед закрытием исходного мини-приложения.
-         *
-         * Слишком маленькая задержка может привести к тому,
-         * что приложение закроется раньше открытия канала.
-         */
-        const CLOSE_DELAY_MS = 350;
+        const CHANNEL_URL = "https://max.ru/join/JdMSujHwZy1VyI52riP8lDjbA4lqzHN8rbbH9LCxvdo";
 
         let bridgeCommandSent = false;
-        let closeScheduled = false;
         let attempts = 0;
 
         /**
-         * Закрывает исходное мини-приложение.
-         */
-        function scheduleClose(transport) {
-            if (closeScheduled) {
-                return;
-            }
-
-            closeScheduled = true;
-
-            setTimeout(() => {
-                try {
-                    /*
-                     * Веб-клиент MAX или desktop через iframe.
-                     */
-                    if (transport === "iframe") {
-                        window.parent.postMessage(
-                            JSON.stringify({
-                                type: "WebAppClose"
-                            }),
-                            "*"
-                        );
-
-                        return;
-                    }
-
-                    /*
-                     * Нативный WebView:
-                     * Android, iOS, macOS, Windows.
-                     */
-                    if (transport === "webview") {
-                        window.WebViewHandler.postEvent(
-                            "WebAppClose",
-                            "{}"
-                        );
-
-                        return;
-                    }
-
-                    /*
-                     * Официальный SDK.
-                     */
-                    if (
-                        transport === "sdk" &&
-                        window.WebApp &&
-                        typeof window.WebApp.close === "function"
-                    ) {
-                        window.WebApp.close();
-                    }
-                } catch (error) {
-                    console.error(
-                        "Ошибка закрытия мини-приложения:",
-                        error
-                    );
-                }
-            }, CLOSE_DELAY_MS);
-        }
-
-        /**
-         * Открывает канал через транспорт MAX.
+         * Отправка команды непосредственно через транспорт MAX.
+         *
+         * Возвращает true, если транспорт найден и команда отправлена.
+         * Это не является подтверждением открытия канала:
+         * MAX Bridge не возвращает результат openMaxLink().
          */
         function sendDirectCommand() {
-            if (bridgeCommandSent) {
-                return true;
-            }
-
             try {
                 /*
-                 * Веб-клиент MAX:
-                 * мини-приложение находится в iframe.
+                 * Веб-клиент MAX: приложение находится в iframe.
                  */
                 if (window.self !== window.top) {
                     window.parent.postMessage(
@@ -120,20 +51,16 @@
                     );
 
                     bridgeCommandSent = true;
-
-                    scheduleClose("iframe");
-
                     return true;
                 }
 
                 /*
                  * Нативный WebView MAX:
-                 * Android, iOS, macOS или Windows.
+                 * Android, iOS или Desktop.
                  */
                 if (
                     window.WebViewHandler &&
-                    typeof window.WebViewHandler.postEvent ===
-                        "function"
+                    typeof window.WebViewHandler.postEvent === "function"
                 ) {
                     window.WebViewHandler.postEvent(
                         "WebAppReady",
@@ -148,9 +75,6 @@
                     );
 
                     bridgeCommandSent = true;
-
-                    scheduleClose("webview");
-
                     return true;
                 }
 
@@ -159,24 +83,17 @@
                  */
                 if (
                     window.WebApp &&
-                    typeof window.WebApp.openMaxLink ===
-                        "function"
+                    typeof window.WebApp.openMaxLink === "function"
                 ) {
                     if (
-                        typeof window.WebApp.ready ===
-                            "function"
+                        typeof window.WebApp.ready === "function"
                     ) {
                         window.WebApp.ready();
                     }
 
-                    window.WebApp.openMaxLink(
-                        CHANNEL_URL
-                    );
+                    window.WebApp.openMaxLink(CHANNEL_URL);
 
                     bridgeCommandSent = true;
-
-                    scheduleClose("sdk");
-
                     return true;
                 }
             } catch (error) {
@@ -189,14 +106,16 @@
             return false;
         }
 
-        /*
-         * Первая попытка выполняется сразу в <head>.
+        /**
+         * Выполняем первую попытку немедленно.
+         *
+         * Код расположен в head, поэтому не ждёт загрузки body.
          */
         sendDirectCommand();
 
-        /*
-         * На некоторых устройствах мост MAX появляется
-         * через несколько десятков миллисекунд.
+        /**
+         * На некоторых устройствах WebViewHandler может появиться
+         * спустя несколько десятков миллисекунд.
          */
         const retryTimer = setInterval(() => {
             attempts += 1;
@@ -205,25 +124,26 @@
                 sendDirectCommand();
             }
 
-            if (
-                bridgeCommandSent ||
-                attempts >= 40
-            ) {
+            /*
+             * Проверяем мост до 1 секунды.
+             */
+            if (bridgeCommandSent || attempts >= 40) {
                 clearInterval(retryTimer);
             }
         }, 25);
 
-        /*
-         * Резервно подключаем официальный SDK,
-         * если встроенный транспорт не был обнаружен.
+        /**
+         * Резервная загрузка официального SDK.
+         *
+         * Выполняется только если нативный транспорт
+         * не появился достаточно быстро.
          */
         setTimeout(() => {
             if (bridgeCommandSent) {
                 return;
             }
 
-            const script =
-                document.createElement("script");
+            const script = document.createElement("script");
 
             script.src =
                 "https://st.max.ru/js/max-web-app.js";
@@ -238,26 +158,27 @@
                 console.error(
                     "Не удалось загрузить официальный MAX Bridge"
                 );
-
-                const status =
-                    document.getElementById("status");
-
-                if (status) {
-                    status.textContent =
-                        "Не удалось открыть канал";
-                }
             };
 
             document.head.appendChild(script);
         }, 100);
 
-        /*
-         * ВАЖНО:
+        /**
+         * Последний резервный вариант.
          *
-         * Здесь больше нет location.replace().
-         * Иначе веб-страница канала снова может
-         * загрузиться внутри окна мини-приложения.
+         * Если нативная команда была проигнорирована,
+         * пробуем обычную навигацию WebView.
          */
+        setTimeout(() => {
+            try {
+                window.location.replace(CHANNEL_URL);
+            } catch (error) {
+                console.error(
+                    "Ошибка обычного перехода:",
+                    error
+                );
+            }
+        }, 1200);
     })();
     </script>
 
