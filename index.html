@@ -8,7 +8,7 @@
         content="width=device-width, initial-scale=1"
     >
 
-    <title>Переход в канал</title>
+    <title>Переход в канал 2</title>
 
     <script>
     (() => {
@@ -17,132 +17,18 @@
         const CHANNEL_URL =
             "https://max.ru/join/ObH6FMhjvGkMBbVgfdD9CZPEBdUB0KR78kR2RqtgcdE";
 
-        /*
-         * Пауза нужна, чтобы MAX сначала успел
-         * обработать открытие канала.
-         */
-        const CLOSE_DELAY_MS = 500;
-
         let bridgeCommandSent = false;
-        let closeScheduled = false;
         let attempts = 0;
 
         /**
-         * Закрывает исходное мини-приложение.
-         *
-         * Используется тот же транспорт, через который
-         * была отправлена команда открытия канала.
-         */
-        function scheduleClose(transport) {
-            if (closeScheduled) {
-                return;
-            }
-
-            closeScheduled = true;
-
-            setTimeout(() => {
-                try {
-                    /*
-                     * MAX Web или desktop через iframe.
-                     */
-                    if (transport === "iframe") {
-                        window.parent.postMessage(
-                            JSON.stringify({
-                                type: "WebAppClose"
-                            }),
-                            "*"
-                        );
-
-                        return;
-                    }
-
-                    /*
-                     * Нативный WebView MAX.
-                     */
-                    if (
-                        transport === "webview" &&
-                        window.WebViewHandler &&
-                        typeof window.WebViewHandler.postEvent ===
-                            "function"
-                    ) {
-                        window.WebViewHandler.postEvent(
-                            "WebAppClose",
-                            "{}"
-                        );
-
-                        return;
-                    }
-
-                    /*
-                     * Официальный SDK.
-                     */
-                    if (
-                        transport === "sdk" &&
-                        window.WebApp &&
-                        typeof window.WebApp.close === "function"
-                    ) {
-                        window.WebApp.close();
-                    }
-                } catch (error) {
-                    console.error(
-                        "Ошибка закрытия мини-приложения:",
-                        error
-                    );
-                }
-            }, CLOSE_DELAY_MS);
-        }
-
-        /**
-         * Проверяет, что официальный SDK запущен
-         * именно внутри контекста MAX.
-         *
-         * Это не даёт обычному браузеру ошибочно считать,
-         * что команда открытия уже была отправлена.
-         */
-        function hasMaxLaunchContext() {
-            try {
-                const hash = window.location.hash || "";
-
-                if (
-                    hash.includes("WebAppData=") ||
-                    hash.includes("WebAppPlatform=") ||
-                    hash.includes("WebAppVersion=") ||
-                    hash.includes("WebAppStartParam=")
-                ) {
-                    return true;
-                }
-
-                if (
-                    sessionStorage.getItem("WebAppData") ||
-                    sessionStorage.getItem("WebAppPlatform")
-                ) {
-                    return true;
-                }
-            } catch (error) {
-                console.warn(
-                    "Не удалось проверить параметры MAX:",
-                    error
-                );
-            }
-
-            return false;
-        }
-
-        /**
-         * Исходная рабочая логика отправки команды.
+         * Отправляет команду открытия ссылки
+         * непосредственно через транспорт MAX.
          */
         function sendDirectCommand() {
-            if (bridgeCommandSent) {
-                return true;
-            }
-
             try {
                 /*
                  * Веб-клиент MAX:
-                 * приложение находится в iframe.
-                 *
-                 * Порядок оставлен таким же,
-                 * как в вашем рабочем коде.
+                 * мини-приложение запущено внутри iframe.
                  */
                 if (window.self !== window.top) {
                     window.parent.postMessage(
@@ -161,8 +47,6 @@
                     );
 
                     bridgeCommandSent = true;
-
-                    scheduleClose("iframe");
 
                     return true;
                 }
@@ -190,20 +74,13 @@
 
                     bridgeCommandSent = true;
 
-                    scheduleClose("webview");
-
                     return true;
                 }
 
                 /*
-                 * Официальный SDK.
-                 *
-                 * Дополнительно проверяем контекст MAX,
-                 * чтобы эта ветка не срабатывала
-                 * в обычном браузере.
+                 * Официальный SDK уже доступен.
                  */
                 if (
-                    hasMaxLaunchContext() &&
                     window.WebApp &&
                     typeof window.WebApp.openMaxLink ===
                         "function"
@@ -221,8 +98,6 @@
 
                     bridgeCommandSent = true;
 
-                    scheduleClose("sdk");
-
                     return true;
                 }
             } catch (error) {
@@ -236,12 +111,13 @@
         }
 
         /*
-         * Первая попытка немедленно.
+         * Первая попытка выполняется немедленно.
          */
         sendDirectCommand();
 
         /*
-         * Повторяем поиск моста до одной секунды.
+         * Мост может появиться спустя несколько
+         * десятков миллисекунд.
          */
         const retryTimer = setInterval(() => {
             attempts += 1;
@@ -288,17 +164,11 @@
         }, 100);
 
         /*
-         * Обычная навигация остаётся только резервом.
+         * Исходный резервный переход.
          *
-         * Важное отличие от исходника:
-         * она НЕ запускается, если команда через MAX
-         * уже была отправлена.
+         * Оставлен в том же виде, как в рабочем варианте.
          */
         setTimeout(() => {
-            if (bridgeCommandSent) {
-                return;
-            }
-
             try {
                 window.location.replace(
                     CHANNEL_URL
