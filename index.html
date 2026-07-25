@@ -1,6 +1,29 @@
 <!doctype html>
 <script>
-location.replace(
-    "https://max.ru/join/ObH6FMhjvGkMBbVgfdD9CZPEBdUB0KR78kR2RqtgcdE"
-);
+(() => {
+    const CHANNEL_URL =
+        "https://max.ru/join/ObH6FMhjvGkMBbVgfdD9CZPEBdUB0KR78kR2RqtgcdE";
+
+    const query =
+        new URLSearchParams(location.search);
+
+    const fragment =
+        new URLSearchParams(location.hash.slice(1));
+
+    const initData =
+        fragment.get("WebAppData") || "";
+
+    const campaign =
+        query.get("WebAppStartParam") || "";
+
+    const body =
+        new URLSearchParams({
+            init_data: initData,
+            campaign: campaign
+        });
+
+    navigator.sendBeacon("/track", body);
+
+    location.replace(CHANNEL_URL);
+})();
 </script>
