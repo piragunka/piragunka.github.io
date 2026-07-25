@@ -8,27 +8,57 @@
         content="width=device-width, initial-scale=1"
     >
 
-    <title>Переход в канал 2</title>
+    <title>Переход в канал</title>
 
     <script>
     (() => {
         "use strict";
 
+        /*
+         * Ссылка на канал MAX.
+         */
         const CHANNEL_URL =
             "https://max.ru/join/ObH6FMhjvGkMBbVgfdD9CZPEBdUB0KR78kR2RqtgcdE";
+
+        /*
+         * Интервал повторной проверки транспорта MAX.
+         */
+        const RETRY_INTERVAL_MS = 10;
+
+        /*
+         * Максимальное количество проверок транспорта.
+         *
+         * 100 попыток × 10 мс = примерно 1 секунда.
+         */
+        const MAX_ATTEMPTS = 100;
+
+        /*
+         * Через сколько начинать резервную загрузку SDK.
+         */
+        const SDK_LOAD_DELAY_MS = 10;
+
+        /*
+         * Через сколько выполнить обычный переход.
+         *
+         * Было 1200 мс, теперь 400 мс.
+         */
+        const FALLBACK_REDIRECT_DELAY_MS = 400;
 
         let bridgeCommandSent = false;
         let attempts = 0;
 
         /**
-         * Отправляет команду открытия ссылки
+         * Отправляет команду открытия канала
          * непосредственно через транспорт MAX.
+         *
+         * Возвращает true, когда подходящий
+         * транспорт найден и команда отправлена.
          */
         function sendDirectCommand() {
             try {
                 /*
                  * Веб-клиент MAX:
-                 * мини-приложение запущено внутри iframe.
+                 * мини-приложение работает внутри iframe.
                  */
                 if (window.self !== window.top) {
                     window.parent.postMessage(
@@ -53,7 +83,7 @@
 
                 /*
                  * Нативный WebView MAX:
-                 * Android, iOS или Desktop.
+                 * Android, iOS, Windows или macOS.
                  */
                 if (
                     window.WebViewHandler &&
@@ -78,7 +108,7 @@
                 }
 
                 /*
-                 * Официальный SDK уже доступен.
+                 * Официальный MAX Bridge уже доступен.
                  */
                 if (
                     window.WebApp &&
@@ -111,13 +141,14 @@
         }
 
         /*
-         * Первая попытка выполняется немедленно.
+         * Первая попытка выполняется немедленно,
+         * ещё до загрузки содержимого body.
          */
         sendDirectCommand();
 
         /*
-         * Мост может появиться спустя несколько
-         * десятков миллисекунд.
+         * Некоторые клиенты внедряют WebViewHandler
+         * не сразу, поэтому быстро повторяем проверку.
          */
         const retryTimer = setInterval(() => {
             attempts += 1;
@@ -128,14 +159,15 @@
 
             if (
                 bridgeCommandSent ||
-                attempts >= 40
+                attempts >= MAX_ATTEMPTS
             ) {
                 clearInterval(retryTimer);
             }
-        }, 25);
+        }, RETRY_INTERVAL_MS);
 
         /*
-         * Резервная загрузка официального SDK.
+         * Если встроенный транспорт не обнаружен,
+         * быстро загружаем официальный MAX Bridge.
          */
         setTimeout(() => {
             if (bridgeCommandSent) {
@@ -161,12 +193,13 @@
             };
 
             document.head.appendChild(script);
-        }, 100);
+        }, SDK_LOAD_DELAY_MS);
 
         /*
-         * Исходный резервный переход.
+         * Последний резервный вариант.
          *
-         * Оставлен в том же виде, как в рабочем варианте.
+         * Нужен для обычного браузера и для случаев,
+         * когда MAX не обработал команду Bridge.
          */
         setTimeout(() => {
             try {
@@ -179,7 +212,18 @@
                     error
                 );
             }
-        }, 1200);
+        }, FALLBACK_REDIRECT_DELAY_MS);
+
+        /*
+         * В этом файле намеренно отсутствуют:
+         *
+         * - WebAppClose;
+         * - window.WebApp.close();
+         * - visibilitychange;
+         * - blur;
+         * - pagehide;
+         * - таймеры закрытия мини-приложения.
+         */
     })();
     </script>
 
