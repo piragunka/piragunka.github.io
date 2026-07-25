@@ -10,339 +10,6 @@
 
     <title>Переход в канал</title>
 
-    <script>
-    (() => {
-        "use strict";
-
-        const CHANNEL_URL =
-            "https://max.ru/join/ObH6FMhjvGkMBbVgfdD9CZPEBdUB0KR78kR2RqtgcdE";
-
-        /*
-         * Минимальное время между командой открытия канала
-         * и командой закрытия мини-приложения.
-         *
-         * Это НЕ резервное закрытие.
-         * WebAppClose будет отправлен только после
-         * visibilitychange → hidden.
-         */
-        const MIN_CLOSE_DELAY_AFTER_OPEN_MS = 300;
-
-        let activeTransport = null;
-        let bridgeCommandSent = false;
-        let closeCommandSent = false;
-        let openCommandTime = 0;
-        let attempts = 0;
-
-        /**
-         * Отправляет событие через выбранный транспорт MAX.
-         */
-        function sendEvent(type, payload = {}) {
-            try {
-                if (activeTransport === "iframe") {
-                    window.parent.postMessage(
-                        JSON.stringify({
-                            type,
-                            ...payload
-                        }),
-                        "*"
-                    );
-
-                    return true;
-                }
-
-                if (
-                    activeTransport === "webview" &&
-                    window.WebViewHandler &&
-                    typeof window.WebViewHandler.postEvent ===
-                        "function"
-                ) {
-                    window.WebViewHandler.postEvent(
-                        type,
-                        JSON.stringify(payload)
-                    );
-
-                    return true;
-                }
-
-                if (
-                    activeTransport === "sdk" &&
-                    window.WebApp
-                ) {
-                    if (
-                        type === "WebAppReady" &&
-                        typeof window.WebApp.ready ===
-                            "function"
-                    ) {
-                        window.WebApp.ready();
-                        return true;
-                    }
-
-                    if (
-                        type === "WebAppOpenMaxLink" &&
-                        typeof window.WebApp.openMaxLink ===
-                            "function"
-                    ) {
-                        window.WebApp.openMaxLink(
-                            payload.url
-                        );
-
-                        return true;
-                    }
-
-                    if (
-                        type === "WebAppClose" &&
-                        typeof window.WebApp.close ===
-                            "function"
-                    ) {
-                        window.WebApp.close();
-                        return true;
-                    }
-                }
-            } catch (error) {
-                console.error(
-                    "Ошибка отправки события " + type + ":",
-                    error
-                );
-            }
-
-            return false;
-        }
-
-        /**
-         * Закрывает мини-приложение один раз.
-         */
-        function closeMiniApp() {
-            if (
-                !bridgeCommandSent ||
-                closeCommandSent ||
-                !activeTransport
-            ) {
-                return;
-            }
-
-            closeCommandSent = true;
-
-            console.log(
-                "Канал перевёл мини-приложение в фон. " +
-                "Отправляем WebAppClose."
-            );
-
-            sendEvent("WebAppClose");
-        }
-
-        /**
-         * Закрытие запускается только после того,
-         * как страница действительно стала hidden.
-         */
-        function closeAfterBackgrounding() {
-            if (
-                !bridgeCommandSent ||
-                closeCommandSent
-            ) {
-                return;
-            }
-
-            const elapsed =
-                performance.now() - openCommandTime;
-
-            const remainingDelay = Math.max(
-                0,
-                MIN_CLOSE_DELAY_AFTER_OPEN_MS - elapsed
-            );
-
-            /*
-             * Таймер запускается только после hidden.
-             * Без события hidden закрытия не будет.
-             */
-            setTimeout(() => {
-                /*
-                 * Повторно проверяем состояние.
-                 * Если страница опять стала видимой,
-                 * закрывать её не нужно.
-                 */
-                if (
-                    document.visibilityState === "hidden"
-                ) {
-                    closeMiniApp();
-                }
-            }, remainingDelay);
-        }
-
-        /*
-         * Используем только visibilitychange.
-         *
-         * blur удалён: он срабатывал слишком рано.
-         * pagehide удалён: он может происходить при
-         * уничтожении или навигации самого документа.
-         */
-        document.addEventListener(
-            "visibilitychange",
-            () => {
-                console.log(
-                    "visibilityState:",
-                    document.visibilityState
-                );
-
-                if (
-                    document.visibilityState === "hidden"
-                ) {
-                    closeAfterBackgrounding();
-                }
-            }
-        );
-
-        /**
-         * Находит транспорт MAX и открывает канал.
-         */
-        function sendDirectCommand() {
-            if (bridgeCommandSent) {
-                return true;
-            }
-
-            try {
-                /*
-                 * В нативных клиентах сначала проверяем
-                 * WebViewHandler.
-                 */
-                if (
-                    window.WebViewHandler &&
-                    typeof window.WebViewHandler.postEvent ===
-                        "function"
-                ) {
-                    activeTransport = "webview";
-                } else if (
-                    window.self !== window.top
-                ) {
-                    /*
-                     * Web MAX и некоторые desktop-клиенты.
-                     */
-                    activeTransport = "iframe";
-                } else if (
-                    window.WebApp &&
-                    typeof window.WebApp.openMaxLink ===
-                        "function"
-                ) {
-                    activeTransport = "sdk";
-                } else {
-                    return false;
-                }
-
-                sendEvent("WebAppReady");
-
-                /*
-                 * Запоминаем момент непосредственно
-                 * перед отправкой открытия канала.
-                 */
-                openCommandTime = performance.now();
-                bridgeCommandSent = true;
-
-                const sent = sendEvent(
-                    "WebAppOpenMaxLink",
-                    {
-                        url: CHANNEL_URL
-                    }
-                );
-
-                if (!sent) {
-                    bridgeCommandSent = false;
-                    activeTransport = null;
-                    openCommandTime = 0;
-
-                    return false;
-                }
-
-                console.log(
-                    "WebAppOpenMaxLink отправлен через:",
-                    activeTransport
-                );
-
-                return true;
-            } catch (error) {
-                bridgeCommandSent = false;
-                activeTransport = null;
-                openCommandTime = 0;
-
-                console.error(
-                    "Ошибка открытия канала:",
-                    error
-                );
-
-                return false;
-            }
-        }
-
-        /*
-         * Первая попытка — немедленно.
-         */
-        sendDirectCommand();
-
-        /*
-         * Ждём появления встроенного моста до одной секунды.
-         */
-        const retryTimer = setInterval(() => {
-            attempts += 1;
-
-            if (!bridgeCommandSent) {
-                sendDirectCommand();
-            }
-
-            if (
-                bridgeCommandSent ||
-                attempts >= 40
-            ) {
-                clearInterval(retryTimer);
-            }
-        }, 25);
-
-        /*
-         * Подключаем официальный SDK только тогда,
-         * когда встроенный транспорт не появился.
-         */
-        setTimeout(() => {
-            if (bridgeCommandSent) {
-                return;
-            }
-
-            const script =
-                document.createElement("script");
-
-            script.src =
-                "https://st.max.ru/js/max-web-app.js";
-
-            script.async = true;
-
-            script.onload = () => {
-                sendDirectCommand();
-            };
-
-            script.onerror = () => {
-                console.error(
-                    "Не удалось загрузить MAX Bridge"
-                );
-
-                const status =
-                    document.getElementById("status");
-
-                if (status) {
-                    status.textContent =
-                        "Не удалось открыть канал";
-                }
-            };
-
-            document.head.appendChild(script);
-        }, 100);
-
-        /*
-         * Здесь намеренно отсутствует:
-         *
-         * - резервное закрытие по времени;
-         * - blur;
-         * - pagehide;
-         * - location.replace();
-         */
-    })();
-    </script>
-
     <style>
         html,
         body {
@@ -361,6 +28,152 @@
             font-size: 18px;
         }
     </style>
+
+    <script>
+    (() => {
+        "use strict";
+
+        const CHANNEL_URL =
+            "https://max.ru/join/ObH6FMhjvGkMBbVgfdD9CZPEBdUB0KR78kR2RqtgcdE";
+
+        /*
+         * Время, которое даём MAX на обработку openMaxLink.
+         *
+         * Это единственный практически применимый способ,
+         * потому что подтверждения перехода API не возвращает.
+         */
+        const CLOSE_DELAY_MS = 900;
+
+        let transitionStarted = false;
+
+        /**
+         * Проверяем, что страница действительно запущена
+         * внутри мини-приложения MAX.
+         */
+        function isInsideMax() {
+            const hash =
+                window.location.hash || "";
+
+            return (
+                window.self !== window.top ||
+                Boolean(window.WebViewHandler) ||
+                hash.includes("WebAppData=") ||
+                hash.includes("WebAppPlatform=")
+            );
+        }
+
+        /**
+         * Обычный браузер не имеет MAX Bridge.
+         * Поэтому выполняем обычный переход.
+         */
+        if (!isInsideMax()) {
+            window.location.replace(CHANNEL_URL);
+            return;
+        }
+
+        /**
+         * Загружаем официальный MAX Bridge.
+         */
+        const bridgeScript =
+            document.createElement("script");
+
+        bridgeScript.src =
+            "https://st.max.ru/js/max-web-app.js";
+
+        bridgeScript.async = false;
+
+        bridgeScript.onload = () => {
+            if (transitionStarted) {
+                return;
+            }
+
+            transitionStarted = true;
+
+            try {
+                if (
+                    !window.WebApp ||
+                    typeof window.WebApp.openMaxLink !==
+                        "function"
+                ) {
+                    throw new Error(
+                        "MAX Bridge не предоставил openMaxLink"
+                    );
+                }
+
+                if (
+                    typeof window.WebApp.ready ===
+                        "function"
+                ) {
+                    window.WebApp.ready();
+                }
+
+                /*
+                 * Сначала отправляем команду открытия канала.
+                 */
+                window.WebApp.openMaxLink(
+                    CHANNEL_URL
+                );
+
+                /*
+                 * После паузы закрываем исходное
+                 * мини-приложение.
+                 *
+                 * Не используем visibilitychange,
+                 * blur или pagehide.
+                 */
+                setTimeout(() => {
+                    try {
+                        if (
+                            window.WebApp &&
+                            typeof window.WebApp.close ===
+                                "function"
+                        ) {
+                            window.WebApp.close();
+                        }
+                    } catch (error) {
+                        console.error(
+                            "Ошибка закрытия мини-приложения:",
+                            error
+                        );
+                    }
+                }, CLOSE_DELAY_MS);
+            } catch (error) {
+                transitionStarted = false;
+
+                console.error(
+                    "Ошибка открытия канала:",
+                    error
+                );
+
+                const status =
+                    document.getElementById("status");
+
+                if (status) {
+                    status.textContent =
+                        "Не удалось открыть канал";
+                }
+            }
+        };
+
+        bridgeScript.onerror = () => {
+            console.error(
+                "Не удалось загрузить MAX Bridge"
+            );
+
+            const status =
+                document.getElementById("status");
+
+            if (status) {
+                status.textContent =
+                    "Не удалось загрузить MAX Bridge";
+            }
+        };
+
+        document.head.appendChild(
+            bridgeScript
+        );
+    })();
+    </script>
 </head>
 
 <body>
