@@ -17,19 +17,27 @@
         const CHANNEL_URL =
             "https://max.ru/join/ObH6FMhjvGkMBbVgfdD9CZPEBdUB0KR78kR2RqtgcdE";
 
+        /*
+         * Минимальное время между командой открытия канала
+         * и командой закрытия мини-приложения.
+         *
+         * Это НЕ резервное закрытие.
+         * WebAppClose будет отправлен только после
+         * visibilitychange → hidden.
+         */
+        const MIN_CLOSE_DELAY_AFTER_OPEN_MS = 300;
+
         let activeTransport = null;
         let bridgeCommandSent = false;
         let closeCommandSent = false;
+        let openCommandTime = 0;
         let attempts = 0;
 
         /**
-         * Отправляет событие в контейнер MAX.
+         * Отправляет событие через выбранный транспорт MAX.
          */
         function sendEvent(type, payload = {}) {
             try {
-                /*
-                 * Web-версия MAX и некоторые desktop-клиенты.
-                 */
                 if (activeTransport === "iframe") {
                     window.parent.postMessage(
                         JSON.stringify({
@@ -42,10 +50,6 @@
                     return true;
                 }
 
-                /*
-                 * Нативный WebView:
-                 * Android, iOS, macOS, Windows.
-                 */
                 if (
                     activeTransport === "webview" &&
                     window.WebViewHandler &&
@@ -60,16 +64,14 @@
                     return true;
                 }
 
-                /*
-                 * Официальный MAX Bridge.
-                 */
                 if (
                     activeTransport === "sdk" &&
                     window.WebApp
                 ) {
                     if (
                         type === "WebAppReady" &&
-                        typeof window.WebApp.ready === "function"
+                        typeof window.WebApp.ready ===
+                            "function"
                     ) {
                         window.WebApp.ready();
                         return true;
@@ -89,7 +91,8 @@
 
                     if (
                         type === "WebAppClose" &&
-                        typeof window.WebApp.close === "function"
+                        typeof window.WebApp.close ===
+                            "function"
                     ) {
                         window.WebApp.close();
                         return true;
@@ -106,9 +109,9 @@
         }
 
         /**
-         * Закрывает мини-приложение только один раз.
+         * Закрывает мини-приложение один раз.
          */
-        function closeMiniApp(reason) {
+        function closeMiniApp() {
             if (
                 !bridgeCommandSent ||
                 closeCommandSent ||
@@ -120,72 +123,76 @@
             closeCommandSent = true;
 
             console.log(
-                "Закрытие мини-приложения:",
-                reason
+                "Канал перевёл мини-приложение в фон. " +
+                "Отправляем WebAppClose."
             );
 
             sendEvent("WebAppClose");
         }
 
         /**
-         * Регистрируем обработчики до открытия канала,
-         * чтобы не пропустить быстрый уход страницы в фон.
+         * Закрытие запускается только после того,
+         * как страница действительно стала hidden.
+         */
+        function closeAfterBackgrounding() {
+            if (
+                !bridgeCommandSent ||
+                closeCommandSent
+            ) {
+                return;
+            }
+
+            const elapsed =
+                performance.now() - openCommandTime;
+
+            const remainingDelay = Math.max(
+                0,
+                MIN_CLOSE_DELAY_AFTER_OPEN_MS - elapsed
+            );
+
+            /*
+             * Таймер запускается только после hidden.
+             * Без события hidden закрытия не будет.
+             */
+            setTimeout(() => {
+                /*
+                 * Повторно проверяем состояние.
+                 * Если страница опять стала видимой,
+                 * закрывать её не нужно.
+                 */
+                if (
+                    document.visibilityState === "hidden"
+                ) {
+                    closeMiniApp();
+                }
+            }, remainingDelay);
+        }
+
+        /*
+         * Используем только visibilitychange.
+         *
+         * blur удалён: он срабатывал слишком рано.
+         * pagehide удалён: он может происходить при
+         * уничтожении или навигации самого документа.
          */
         document.addEventListener(
             "visibilitychange",
             () => {
+                console.log(
+                    "visibilityState:",
+                    document.visibilityState
+                );
+
                 if (
                     document.visibilityState === "hidden"
                 ) {
-                    closeMiniApp(
-                        "visibilitychange"
-                    );
+                    closeAfterBackgrounding();
                 }
-            }
-        );
-
-        window.addEventListener(
-            "pagehide",
-            () => {
-                closeMiniApp("pagehide");
-            },
-            {
-                capture: true
-            }
-        );
-
-        /*
-         * В desktop-клиенте visibilitychange может
-         * не сработать, но окно теряет фокус.
-         */
-        window.addEventListener(
-            "blur",
-            () => {
-                if (
-                    !bridgeCommandSent ||
-                    closeCommandSent
-                ) {
-                    return;
-                }
-
-                /*
-                 * Даём клиенту немного времени изменить
-                 * фактическое состояние фокуса.
-                 *
-                 * Это не резервное закрытие:
-                 * обработчик запускается только после blur.
-                 */
-                setTimeout(() => {
-                    if (!document.hasFocus()) {
-                        closeMiniApp("blur");
-                    }
-                }, 50);
             }
         );
 
         /**
-         * Определяет транспорт и отправляет
-         * команду открытия канала.
+         * Находит транспорт MAX и открывает канал.
          */
         function sendDirectCommand() {
             if (bridgeCommandSent) {
@@ -194,16 +201,22 @@
 
             try {
                 /*
-                 * Web MAX или iframe desktop-клиента.
+                 * В нативных клиентах сначала проверяем
+                 * WebViewHandler.
                  */
-                if (window.self !== window.top) {
-                    activeTransport = "iframe";
-                } else if (
+                if (
                     window.WebViewHandler &&
                     typeof window.WebViewHandler.postEvent ===
                         "function"
                 ) {
                     activeTransport = "webview";
+                } else if (
+                    window.self !== window.top
+                ) {
+                    /*
+                     * Web MAX и некоторые desktop-клиенты.
+                     */
+                    activeTransport = "iframe";
                 } else if (
                     window.WebApp &&
                     typeof window.WebApp.openMaxLink ===
@@ -214,14 +227,14 @@
                     return false;
                 }
 
-                /*
-                 * Ставим флаг до отправки команды.
-                 * Это важно, если visibilitychange
-                 * сработает почти мгновенно.
-                 */
-                bridgeCommandSent = true;
-
                 sendEvent("WebAppReady");
+
+                /*
+                 * Запоминаем момент непосредственно
+                 * перед отправкой открытия канала.
+                 */
+                openCommandTime = performance.now();
+                bridgeCommandSent = true;
 
                 const sent = sendEvent(
                     "WebAppOpenMaxLink",
@@ -233,14 +246,21 @@
                 if (!sent) {
                     bridgeCommandSent = false;
                     activeTransport = null;
+                    openCommandTime = 0;
 
                     return false;
                 }
+
+                console.log(
+                    "WebAppOpenMaxLink отправлен через:",
+                    activeTransport
+                );
 
                 return true;
             } catch (error) {
                 bridgeCommandSent = false;
                 activeTransport = null;
+                openCommandTime = 0;
 
                 console.error(
                     "Ошибка открытия канала:",
@@ -252,13 +272,12 @@
         }
 
         /*
-         * Первая попытка выполняется немедленно.
+         * Первая попытка — немедленно.
          */
         sendDirectCommand();
 
         /*
-         * Некоторые клиенты внедряют мост
-         * спустя несколько миллисекунд.
+         * Ждём появления встроенного моста до одной секунды.
          */
         const retryTimer = setInterval(() => {
             attempts += 1;
@@ -276,11 +295,8 @@
         }, 25);
 
         /*
-         * Резервно загружаем официальный SDK,
-         * только если встроенный мост не обнаружен.
-         *
-         * Это резерв получения моста,
-         * а не резервное закрытие приложения.
+         * Подключаем официальный SDK только тогда,
+         * когда встроенный транспорт не появился.
          */
         setTimeout(() => {
             if (bridgeCommandSent) {
@@ -315,6 +331,15 @@
 
             document.head.appendChild(script);
         }, 100);
+
+        /*
+         * Здесь намеренно отсутствует:
+         *
+         * - резервное закрытие по времени;
+         * - blur;
+         * - pagehide;
+         * - location.replace();
+         */
     })();
     </script>
 
