@@ -14,252 +14,23 @@
     (() => {
         "use strict";
 
-        /*
-         * Ссылка на канал MAX.
-         */
         const CHANNEL_URL =
             "https://max.ru/join/ObH6FMhjvGkMBbVgfdD9CZPEBdUB0KR78kR2RqtgcdE";
 
         /*
-         * Как часто проверять появление транспорта MAX.
-         */
-        const RETRY_INTERVAL_MS = 10;
-
-        /*
-         * Максимальное количество проверок.
+         * Немедленно заменяем страницу мини-приложения
+         * страницей канала MAX.
          *
-         * 100 × 10 мс = максимум около одной секунды.
+         * Никакого ожидания и MAX Bridge здесь нет.
          */
-        const MAX_ATTEMPTS = 100;
-
-        /*
-         * Через сколько миллисекунд подключать SDK,
-         * если встроенный транспорт пока не найден.
-         */
-        const SDK_LOAD_DELAY_MS = 10;
-
-        let bridgeCommandSent = false;
-        let sdkLoadingStarted = false;
-        let attempts = 0;
-
-        /**
-         * Отправляет команду открытия канала через MAX.
-         *
-         * Возвращает true, когда транспорт найден
-         * и команда WebAppOpenMaxLink отправлена.
-         */
-        function sendDirectCommand() {
-            if (bridgeCommandSent) {
-                return true;
-            }
-
-            try {
-                /*
-                 * Веб-клиент MAX:
-                 * мини-приложение находится внутри iframe.
-                 *
-                 * Эта ветка оставлена первой, как в вашем
-                 * изначально рабочем варианте.
-                 */
-                if (window.self !== window.top) {
-                    window.parent.postMessage(
-                        JSON.stringify({
-                            type: "WebAppReady"
-                        }),
-                        "*"
-                    );
-
-                    window.parent.postMessage(
-                        JSON.stringify({
-                            type: "WebAppOpenMaxLink",
-                            url: CHANNEL_URL
-                        }),
-                        "*"
-                    );
-
-                    bridgeCommandSent = true;
-
-                    console.log(
-                        "WebAppOpenMaxLink отправлен через iframe"
-                    );
-
-                    return true;
-                }
-
-                /*
-                 * Нативный WebView MAX:
-                 * Android, iOS, Windows или macOS.
-                 */
-                if (
-                    window.WebViewHandler &&
-                    typeof window.WebViewHandler.postEvent ===
-                        "function"
-                ) {
-                    window.WebViewHandler.postEvent(
-                        "WebAppReady",
-                        "{}"
-                    );
-
-                    window.WebViewHandler.postEvent(
-                        "WebAppOpenMaxLink",
-                        JSON.stringify({
-                            url: CHANNEL_URL
-                        })
-                    );
-
-                    bridgeCommandSent = true;
-
-                    console.log(
-                        "WebAppOpenMaxLink отправлен через WebViewHandler"
-                    );
-
-                    return true;
-                }
-
-                /*
-                 * Официальный MAX Bridge.
-                 */
-                if (
-                    window.WebApp &&
-                    typeof window.WebApp.openMaxLink ===
-                        "function"
-                ) {
-                    if (
-                        typeof window.WebApp.ready ===
-                            "function"
-                    ) {
-                        window.WebApp.ready();
-                    }
-
-                    window.WebApp.openMaxLink(
-                        CHANNEL_URL
-                    );
-
-                    bridgeCommandSent = true;
-
-                    console.log(
-                        "WebAppOpenMaxLink отправлен через MAX SDK"
-                    );
-
-                    return true;
-                }
-            } catch (error) {
-                console.error(
-                    "Ошибка вызова MAX Bridge:",
-                    error
-                );
-            }
-
-            return false;
+        try {
+            window.location.replace(CHANNEL_URL);
+        } catch (error) {
+            console.error(
+                "Не удалось выполнить переход:",
+                error
+            );
         }
-
-        /**
-         * Подключает официальный MAX Bridge.
-         */
-        function loadMaxSdk() {
-            if (
-                bridgeCommandSent ||
-                sdkLoadingStarted
-            ) {
-                return;
-            }
-
-            sdkLoadingStarted = true;
-
-            const script =
-                document.createElement("script");
-
-            script.src =
-                "https://st.max.ru/js/max-web-app.js";
-
-            script.async = true;
-
-            script.onload = () => {
-                console.log(
-                    "Официальный MAX Bridge загружен"
-                );
-
-                sendDirectCommand();
-            };
-
-            script.onerror = () => {
-                console.error(
-                    "Не удалось загрузить официальный MAX Bridge"
-                );
-
-                const status =
-                    document.getElementById("status");
-
-                if (status) {
-                    status.textContent =
-                        "Не удалось подключиться к MAX";
-                }
-            };
-
-            document.head.appendChild(script);
-        }
-
-        /*
-         * Первая попытка выполняется немедленно.
-         * Никакой задержки перед редиректом нет.
-         */
-        sendDirectCommand();
-
-        /*
-         * Некоторые версии клиента внедряют
-         * WebViewHandler с небольшой задержкой.
-         */
-        const retryTimer = setInterval(() => {
-            attempts += 1;
-
-            if (!bridgeCommandSent) {
-                sendDirectCommand();
-            }
-
-            if (
-                bridgeCommandSent ||
-                attempts >= MAX_ATTEMPTS
-            ) {
-                clearInterval(retryTimer);
-
-                if (!bridgeCommandSent) {
-                    console.error(
-                        "Транспорт MAX не обнаружен"
-                    );
-
-                    const status =
-                        document.getElementById("status");
-
-                    if (status) {
-                        status.textContent =
-                            "Не удалось открыть канал";
-                    }
-                }
-            }
-        }, RETRY_INTERVAL_MS);
-
-        /*
-         * Быстро подключаем SDK, если встроенный
-         * транспорт не появился сразу.
-         */
-        setTimeout(() => {
-            if (!bridgeCommandSent) {
-                loadMaxSdk();
-            }
-        }, SDK_LOAD_DELAY_MS);
-
-        /*
-         * Здесь намеренно отсутствуют:
-         *
-         * - location.replace();
-         * - FALLBACK_REDIRECT_DELAY_MS;
-         * - WebAppClose;
-         * - window.WebApp.close();
-         * - visibilitychange;
-         * - blur;
-         * - pagehide;
-         * - любые таймеры закрытия приложения.
-         */
     })();
     </script>
 
@@ -285,7 +56,7 @@
 
 <body>
     <div id="status">
-        Открываем канал 4 …
+        Открываем канал 5 …
     </div>
 </body>
 </html>
