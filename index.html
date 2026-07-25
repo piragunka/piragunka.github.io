@@ -23,10 +23,6 @@
         body {
             padding: 24px;
         }
-
-        #status {
-            font-size: 18px;
-        }
     </style>
 
     <script>
@@ -34,84 +30,138 @@
         "use strict";
 
         /*
-         * УКАЖИТЕ ТОЧНУЮ ССЫЛКУ КАНАЛА.
+         * Укажите точную ссылку на нужный канал MAX.
          */
         const CHANNEL_URL =
             "https://max.ru/join/JdMSujHwZy1VyI52riP8lDjbA4lqzHN8rbbH9LCxvdo";
 
-        let commandSent = false;
-        let attempts = 0;
+        /*
+         * Пауза между открытием канала
+         * и закрытием мини-приложения.
+         *
+         * 180 мс — компромисс между скоростью
+         * и тем, чтобы MAX успел обработать открытие.
+         */
+        const CLOSE_DELAY_MS = 180;
+
+        let transitionStarted = false;
+        let retryCount = 0;
 
         /**
-         * Отправляет команду открытия канала только один раз.
+         * Определяет транспорт, используемый MAX.
          */
-        function openChannelOnce() {
-            if (commandSent) {
+        function getTransport() {
+            /*
+             * MAX Web и некоторые desktop-клиенты.
+             * Именно iframe SDK проверяет первым.
+             */
+            if (window.self !== window.top) {
+                return "iframe";
+            }
+
+            /*
+             * Нативные клиенты MAX.
+             */
+            if (
+                window.WebViewHandler &&
+                typeof window.WebViewHandler.postEvent ===
+                    "function"
+            ) {
+                return "webview";
+            }
+
+            /*
+             * Официальный Bridge уже подключён.
+             */
+            if (
+                window.WebApp &&
+                typeof window.WebApp.openMaxLink ===
+                    "function"
+            ) {
+                return "sdk";
+            }
+
+            return null;
+        }
+
+        /**
+         * Отправляет событие напрямую контейнеру MAX.
+         */
+        function sendDirectEvent(type, payload = {}) {
+            const transport = getTransport();
+
+            if (transport === "iframe") {
+                window.parent.postMessage(
+                    JSON.stringify({
+                        type,
+                        ...payload
+                    }),
+                    "*"
+                );
+
                 return true;
             }
 
+            if (transport === "webview") {
+                window.WebViewHandler.postEvent(
+                    type,
+                    JSON.stringify(payload)
+                );
+
+                return true;
+            }
+
+            return false;
+        }
+
+        /**
+         * Закрывает именно исходное мини-приложение.
+         */
+        function closeMiniApp(transport) {
             try {
-                /*
-                 * Нативное приложение MAX:
-                 * macOS, Windows, Android, iOS.
-                 */
-                if (
-                    window.WebViewHandler &&
-                    typeof window.WebViewHandler.postEvent ===
-                        "function"
-                ) {
-                    commandSent = true;
+                if (transport === "sdk") {
+                    if (
+                        window.WebApp &&
+                        typeof window.WebApp.close ===
+                            "function"
+                    ) {
+                        window.WebApp.close();
+                    }
 
-                    window.WebViewHandler.postEvent(
-                        "WebAppReady",
-                        "{}"
-                    );
-
-                    window.WebViewHandler.postEvent(
-                        "WebAppOpenMaxLink",
-                        JSON.stringify({
-                            url: CHANNEL_URL
-                        })
-                    );
-
-                    return true;
+                    return;
                 }
 
-                /*
-                 * Web-клиент и некоторые версии
-                 * desktop-клиента используют iframe.
-                 */
-                if (window.self !== window.top) {
-                    commandSent = true;
+                sendDirectEvent(
+                    "WebAppClose",
+                    {}
+                );
+            } catch (error) {
+                console.error(
+                    "Не удалось закрыть мини-приложение:",
+                    error
+                );
+            }
+        }
 
-                    window.parent.postMessage(
-                        JSON.stringify({
-                            type: "WebAppReady"
-                        }),
-                        "*"
-                    );
+        /**
+         * Открывает канал и затем закрывает
+         * текущее мини-приложение.
+         */
+        function openChannelAndClose() {
+            if (transitionStarted) {
+                return true;
+            }
 
-                    window.parent.postMessage(
-                        JSON.stringify({
-                            type: "WebAppOpenMaxLink",
-                            url: CHANNEL_URL
-                        }),
-                        "*"
-                    );
+            const transport = getTransport();
 
-                    return true;
-                }
+            if (!transport) {
+                return false;
+            }
 
-                /*
-                 * Официальный Bridge уже загружен.
-                 */
-                if (
-                    window.WebApp &&
-                    typeof window.WebApp.openMaxLink ===
-                        "function"
-                ) {
-                    commandSent = true;
+            transitionStarted = true;
 
+            try {
+                if (transport === "sdk") {
                     if (
                         typeof window.WebApp.ready ===
                             "function"
@@ -122,63 +172,68 @@
                     window.WebApp.openMaxLink(
                         CHANNEL_URL
                     );
+                } else {
+                    sendDirectEvent(
+                        "WebAppReady",
+                        {}
+                    );
 
-                    return true;
+                    sendDirectEvent(
+                        "WebAppOpenMaxLink",
+                        {
+                            url: CHANNEL_URL
+                        }
+                    );
                 }
+
+                /*
+                 * Не закрываем приложение сразу:
+                 * MAX должен сначала обработать открытие канала.
+                 */
+                setTimeout(() => {
+                    closeMiniApp(transport);
+                }, CLOSE_DELAY_MS);
+
+                return true;
             } catch (error) {
+                transitionStarted = false;
+
                 console.error(
                     "Ошибка открытия канала:",
                     error
                 );
-            }
 
-            return false;
+                return false;
+            }
         }
 
         /*
-         * Первая попытка выполняется сразу в <head>.
+         * Первая попытка — немедленно,
+         * ещё до загрузки body.
          */
-        if (openChannelOnce()) {
+        if (openChannelAndClose()) {
             return;
         }
 
         /*
-         * На некоторых устройствах мост внедряется
-         * через несколько миллисекунд после начала страницы.
+         * Иногда мост MAX появляется не в первый
+         * момент выполнения страницы.
          */
-        const timer = setInterval(() => {
-            attempts += 1;
+        const retryTimer = setInterval(() => {
+            retryCount += 1;
 
             if (
-                openChannelOnce() ||
-                attempts >= 50
+                openChannelAndClose() ||
+                retryCount >= 100
             ) {
-                clearInterval(timer);
+                clearInterval(retryTimer);
             }
         }, 10);
-
-        /*
-         * Только диагностическая надпись.
-         * Никакого location.replace здесь нет.
-         */
-        setTimeout(() => {
-            if (!commandSent) {
-                const status =
-                    document.getElementById("status");
-
-                if (status) {
-                    status.textContent =
-                        "Не удалось обнаружить мост MAX";
-                }
-            }
-        }, 600);
     })();
     </script>
 </head>
 
 <body>
-    <div id="status">
-        Открываем канал…
-    </div>
+    Открываем канал…
 </body>
 </html>
